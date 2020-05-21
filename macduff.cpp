@@ -2,6 +2,7 @@
 #include <opencv/cv.h>
 #include <opencv/highgui.h>
 #include <opencv2/calib3d/calib3d.hpp>
+#include <opencv2/imgproc.hpp>
 #include <iostream>
 #include <fstream>
 
@@ -230,12 +231,41 @@ double check_colorchecker(CvMat * colorchecker)
     return difference;
 }
 
+// src: https://stackoverflow.com/questions/50353884/calculate-text-size
+void drawtorect(IplImage * image, cv::Rect target, int face, int thickness, cv::Scalar color, const std::string & str)
+{
+
+    cv::Size rect = cv::getTextSize(str, face, 1.0, thickness, 0);
+    double scalex = (double)target.width / (double)rect.width;
+    double scaley = (double)target.height / (double)rect.height;
+    double scale = std::min(scalex, scaley);
+    int marginx = scale == scalex ? 0 : (int)((double)target.width * (scalex - scale) / scalex * 0.5);
+    int marginy = scale == scaley ? 0 : (int)((double)target.height * (scaley - scale) / scaley * 0.5);
+    // cv::putText(mat, str, cv::Point(target.x + marginx, target.y + target.height - marginy), face, scale, color, thickness, 8, false);
+
+    CvFont font;
+    cvInitFont(&font, face, scale, scale);
+    cvPutText(
+        image,
+        str.c_str(),
+        cvPoint(target.x + marginx, target.y + target.height - marginy),
+        &font,
+        color
+    );
+}
+
 void draw_colorchecker(CvMat * colorchecker_values, CvMat * colorchecker_points, IplImage * image, int size)
 {
+
+
     for(int x = 0; x < MACBETH_WIDTH; x++) {
         for(int y = 0; y < MACBETH_HEIGHT; y++) {
             CvScalar this_color = cvGet2D(colorchecker_values,y,x);
             CvScalar this_point = cvGet2D(colorchecker_points,y,x);
+
+            int difference = int(euclidean_distance_lab(this_color,colorchecker_srgb[y][x]));
+            std::string res = std::to_string(difference);
+
             
             cvCircle(
                 image,
@@ -252,6 +282,16 @@ void draw_colorchecker(CvMat * colorchecker_values, CvMat * colorchecker_points,
                 this_color,
                 -1
             );
+
+            drawtorect( 
+                image, 
+                cv::Rect(this_point.val[0] - size / 2,this_point.val[1] - size / 2, size, size),
+                cv::FONT_HERSHEY_PLAIN,
+                1,
+                cv::Scalar(0,0,0),
+                res
+            );
+
         }
     }
 }
@@ -322,7 +362,7 @@ ColorChecker find_colorchecker(CvSeq * quads, CvSeq * boxes, CvMemStorage *stora
     
     fprintf(stderr,"Average contained rect size is %d\n", average_size);
     
-    CvMat * this_colorchecker = cvCreateMat(MACBETH_HEIGHT, MACBETH_WIDTH, CV_32FC3);
+    CvMat * this_colorchecker_values = cvCreateMat(MACBETH_HEIGHT, MACBETH_WIDTH, CV_32FC3);
     CvMat * this_colorchecker_points = cvCreateMat( MACBETH_HEIGHT, MACBETH_WIDTH, CV_32FC2 );
     
     // calculate the averages for our oriented colorchecker
@@ -361,30 +401,30 @@ ColorChecker find_colorchecker(CvSeq * quads, CvSeq * boxes, CvMemStorage *stora
             
             CvScalar average_color = rect_average(rect, original_image);
             
-            cvSet2D(this_colorchecker,y,x,average_color);
+            cvSet2D(this_colorchecker_values,y,x,average_color);
         }
     }
     
-    double orient_1_error = check_colorchecker(this_colorchecker);
-    cvFlip(this_colorchecker,NULL,-1);
-    double orient_2_error = check_colorchecker(this_colorchecker);
+    double orient_1_error = check_colorchecker(this_colorchecker_values);
+    cvFlip(this_colorchecker_values,NULL,-1);
+    double orient_2_error = check_colorchecker(this_colorchecker_values);
     
     fprintf(stderr,"Orientation 1: %f\n",orient_1_error);
     fprintf(stderr,"Orientation 2: %f\n",orient_2_error);
     
     if(orient_1_error < orient_2_error) {
-        cvFlip(this_colorchecker,NULL,-1);
+        cvFlip(this_colorchecker_values,NULL,-1);
     }
     else {
         cvFlip(this_colorchecker_points,NULL,-1);
     }
     
-    // draw_colorchecker(this_colorchecker,this_colorchecker_points,image,average_size);
+    // draw_colorchecker(this_colorchecker_values,this_colorchecker_points,image,average_size);
     
     ColorChecker found_colorchecker;
     
     found_colorchecker.error = MIN(orient_1_error,orient_2_error);
-    found_colorchecker.values = this_colorchecker;
+    found_colorchecker.values = this_colorchecker_values;
     found_colorchecker.points = this_colorchecker_points;
     found_colorchecker.size = average_size;
     
@@ -450,7 +490,7 @@ ColorChecker restore_data(IplImage *original_image) {
 
     printf("getting color values from restored grid\n");
 
-    CvMat * this_colorchecker = cvCreateMat(MACBETH_HEIGHT, MACBETH_WIDTH, CV_32FC3);
+    CvMat * this_colorchecker_values = cvCreateMat(MACBETH_HEIGHT, MACBETH_WIDTH, CV_32FC3);
     // calculate the averages for our oriented colorchecker
     for(int x = 0; x < MACBETH_WIDTH; x++) {
         for(int y = 0; y < MACBETH_HEIGHT; y++) {
@@ -465,7 +505,7 @@ ColorChecker restore_data(IplImage *original_image) {
             
             CvScalar average_color = rect_average(rect, original_image);
             
-            cvSet2D(this_colorchecker,y,x,average_color);
+            cvSet2D(this_colorchecker_values,y,x,average_color);
             //printf("GET: w,h color= (%d, %d) xy=(%d,%d) -> (%f %f %f)\n", x, y, rect.x, rect.y, average_color.val[2], average_color.val[1], average_color.val[0]);
         }
     }
@@ -473,8 +513,8 @@ ColorChecker restore_data(IplImage *original_image) {
     // already oriented when saved
     ColorChecker found_colorchecker;
     found_colorchecker.points = this_colorchecker_points;
-    found_colorchecker.error  = check_colorchecker(this_colorchecker);
-    found_colorchecker.values = this_colorchecker;
+    found_colorchecker.error  = check_colorchecker(this_colorchecker_values);
+    found_colorchecker.values = this_colorchecker_values;
     found_colorchecker.size   = average_size; 
 
     printf("done restoring data\n");
