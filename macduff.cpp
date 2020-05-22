@@ -102,7 +102,18 @@ double euclidean_distance(CvPoint p_1, CvPoint p_2)
 /*
 https://stackoverflow.com/questions/26992476/cv-color-bgr2lab-gives-wrong-range
 
-The LAB values returned from OpenCV will never lie outside the ranges 0 ≤ L ≤ 100, -127 ≤ a ≤ 127, -127 ≤ b ≤ 127 when converting float images (OpenCV color conversions). When converting 8-bit images, the range of L is multiplied by 255/100, and a and b get an offset of 128 to fill out the 8-bit range.
+Normally:
+
+    L* ranges from 0 to 100
+    a* and b* from -128 to +127
+
+Using float [0,1] images gives proper LAB values.
+With 8-bit images, Opencv offsets ab and scales L in a weird way to fit back into 8-bit space:
+     L is multiplied by 255/100
+    a and b get an offset of 128
+
+=> just convert to float before calling BGR2Lab
+
 */
 
 double euclidean_distance_lab(CvScalar p_1, CvScalar p_2)
@@ -593,6 +604,16 @@ CvSeq * find_quad( CvSeq * src_contour, CvMemStorage *storage, int min_size)
     return NULL;
 }
 
+// estimate greyness for white balance
+// this metric gives more weight to white over black tint
+float calc_grey_factor(CvScalar value) {
+    float greyness = sqrt(
+            pow(value.val[2]-value.val[1],2) + 
+            pow(value.val[0]-value.val[1],2)
+    );
+    return greyness;
+}
+
 IplImage * find_macbeth( const char *img )
 {
     IplImage * macbeth_img = cvLoadImage( img,
@@ -851,22 +872,36 @@ IplImage * find_macbeth( const char *img )
 
             // print out the colorchecker info
             // should assert that found_colorchecker.error == total_error
-            printf("  R , G , B ,   r , g , b , deltaE\n");
+            printf("  R , G , B ,   r , g , b , deltaE, GreyFactor\n");
 
-            double total_error, max_error = 0;
+            double deltaE_total_error, deltaE_max_error = 0;
+            double grey_factor, grey_total_error, grey_max_error = 0;
             for(int y = 0; y < MACBETH_HEIGHT; y++) {            
                 for(int x = 0; x < MACBETH_WIDTH; x++) {
                     CvScalar known_value = colorchecker_srgb[y][x];
                     CvScalar this_value = cvGet2D(found_colorchecker.values,y,x);
                     double distance = euclidean_distance_lab(this_value,known_value);
-                    total_error += distance;
-                    max_error = std::max(max_error, distance);
+                    deltaE_total_error += distance;
+                    deltaE_max_error = std::max(deltaE_max_error, distance);
                     
-                    printf(" %3.0f,%3.0f,%3.0f,  %3.0f,%3.0f,%3.0f,  %3.0f\n",
+                    if (y == MACBETH_HEIGHT - 1) {
+                        grey_factor = calc_grey_factor(this_value);
+                        grey_total_error += grey_factor;
+                        grey_max_error = std::max(grey_max_error, grey_factor);
+                    }
+                    
+                    printf(" %3.0f,%3.0f,%3.0f,  %3.0f,%3.0f,%3.0f,  %3.0f",
                         known_value.val[2],known_value.val[1],known_value.val[0],
                          this_value.val[2], this_value.val[1], this_value.val[0],
                         distance
                     );
+                    if (y == MACBETH_HEIGHT - 1) {
+                        printf(",  %3.0f\n", grey_factor);
+                    } else {
+                        printf("\n");
+                    }
+
+
                 }
             }
             printf("\n");
@@ -884,15 +919,24 @@ IplImage * find_macbeth( const char *img )
                 }
             }
     */
-            printf("   deltaE2000   total_error = %.1f\n", total_error);
-            printf("                  max_error = %.1f\n", max_error);
-            printf("              average_error = %.1f\n", 
-                    total_error / (float) (MACBETH_HEIGHT * MACBETH_WIDTH));
+            float grey_average_error = grey_total_error / (float) MACBETH_WIDTH;
+
+            printf("           grey_total_error = %.1f\n", grey_total_error);
+            printf("             grey_max_error = %.1f\n", grey_max_error);
+            printf("         grey_average_error = %.1f\n", grey_average_error);
+            printf("\n");
+                            
+                            
+            float deltaE_average_error = 
+                    deltaE_total_error / (float) (MACBETH_HEIGHT * MACBETH_WIDTH);
+
+            printf("         deltaE_total_error = %.1f\n", deltaE_total_error);
+            printf("           deltaE_max_error = %.1f\n", deltaE_max_error);
+            printf("       deltaE_average_error = %.1f\n", deltaE_average_error);
             
         }
        
         
-        // TODO 
         if (! restore_from_previous_run) {
             cvReleaseMemStorage( &storage );
             if( macbeth_original ) cvReleaseImage( &macbeth_original );
