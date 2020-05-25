@@ -255,7 +255,7 @@ void drawtorect(IplImage * image, cv::Rect target, int face, int thickness, cv::
     // cv::putText(mat, str, cv::Point(target.x + marginx, target.y + target.height - marginy), face, scale, color, thickness, 8, false);
 
     CvFont font;
-    cvInitFont(&font, face, scale, scale);
+    cvInitFont(&font, face, scale, scale, 0, thickness);
     cvPutText(
         image,
         str.c_str(),
@@ -294,12 +294,19 @@ void draw_colorchecker(CvMat * colorchecker_values, CvMat * colorchecker_points,
                 -1
             );
 
+            // increase text contrast with 
+            float threshold = 300;
+            cv::Scalar text_color = cv::Scalar(0,0,0);
+            float sum = this_color.val[0] + this_color.val[1] + this_color.val[2]; 
+            if (sum < threshold)
+                text_color = cv::Scalar(255,255,255);
+
             drawtorect( 
                 image, 
                 cv::Rect(this_point.val[0] - size / 2,this_point.val[1] - size / 2, size, size),
-                cv::FONT_HERSHEY_PLAIN,
+                cv::FONT_HERSHEY_TRIPLEX,
                 1,
-                cv::Scalar(0,0,0),
+                text_color,
                 res
             );
 
@@ -468,36 +475,7 @@ void save_data(ColorChecker found_colorchecker) {
 ColorChecker restore_data(IplImage *original_image) {
 
     printf("restoring data\n");
-
-
-// start of macduff grid data 
-    double average_size = 23;
-     CvMat * this_colorchecker_points = cvCreateMat( MACBETH_HEIGHT, MACBETH_WIDTH, CV_32FC2 );
-    cvSet2D(this_colorchecker_points, 0, 0, cvScalar(571,345));
-    cvSet2D(this_colorchecker_points, 0, 1, cvScalar(508,347));
-    cvSet2D(this_colorchecker_points, 0, 2, cvScalar(445,348));
-    cvSet2D(this_colorchecker_points, 0, 3, cvScalar(382,350));
-    cvSet2D(this_colorchecker_points, 0, 4, cvScalar(319,352));
-    cvSet2D(this_colorchecker_points, 0, 5, cvScalar(257,354));
-    cvSet2D(this_colorchecker_points, 1, 0, cvScalar(569,282));
-    cvSet2D(this_colorchecker_points, 1, 1, cvScalar(506,284));
-    cvSet2D(this_colorchecker_points, 1, 2, cvScalar(443,285));
-    cvSet2D(this_colorchecker_points, 1, 3, cvScalar(381,287));
-    cvSet2D(this_colorchecker_points, 1, 4, cvScalar(318,289));
-    cvSet2D(this_colorchecker_points, 1, 5, cvScalar(255,291));
-    cvSet2D(this_colorchecker_points, 2, 0, cvScalar(567,219));
-    cvSet2D(this_colorchecker_points, 2, 1, cvScalar(504,221));
-    cvSet2D(this_colorchecker_points, 2, 2, cvScalar(442,222));
-    cvSet2D(this_colorchecker_points, 2, 3, cvScalar(379,224));
-    cvSet2D(this_colorchecker_points, 2, 4, cvScalar(316,226));
-    cvSet2D(this_colorchecker_points, 2, 5, cvScalar(253,228));
-    cvSet2D(this_colorchecker_points, 3, 0, cvScalar(565,156));
-    cvSet2D(this_colorchecker_points, 3, 1, cvScalar(503,158));
-    cvSet2D(this_colorchecker_points, 3, 2, cvScalar(440,159));
-    cvSet2D(this_colorchecker_points, 3, 3, cvScalar(377,161));
-    cvSet2D(this_colorchecker_points, 3, 4, cvScalar(314,163));
-    cvSet2D(this_colorchecker_points, 3, 5, cvScalar(251,165));
-// end macduff grid data 
+#include "restore.cpp"
 
     printf("getting color values from restored grid\n");
 
@@ -933,7 +911,31 @@ IplImage * find_macbeth( const char *img )
             printf("         deltaE_total_error = %.1f\n", deltaE_total_error);
             printf("           deltaE_max_error = %.1f\n", deltaE_max_error);
             printf("       deltaE_average_error = %.1f\n", deltaE_average_error);
+
+            int size = found_colorchecker.size;
+
+            char buf[BUFSIZ];
+            sprintf (buf, "grey_average_error  = %2.0f", grey_average_error);
+            drawtorect( 
+                macbeth_img, 
+                cv::Rect(0,0,size * 10,size),
+                cv::FONT_HERSHEY_TRIPLEX,
+                3,
+                cv::Scalar(255,255,255),
+                buf
+            );
+
+            sprintf (buf, "deltaE_average_error = %2.0f", deltaE_average_error);
             
+            drawtorect( 
+                macbeth_img, 
+                cv::Rect(0, size, size * 10, size),
+                cv::FONT_HERSHEY_TRIPLEX,
+                3,
+                cv::Scalar(255,255,255),
+                buf
+            );
+
         }
        
         
