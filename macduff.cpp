@@ -6,8 +6,8 @@
 #include <iostream>
 #include <fstream>
 
+// deltaE calcs
 #include "CIEDE2000.h"
-
 
 #define MACBETH_WIDTH   6
 #define MACBETH_HEIGHT  4
@@ -17,9 +17,9 @@
 
 #define MAX_RGB_DISTANCE 444
 
-
 bool save_restore_data_to_file = false; // save grid locations in side file
 bool restore_from_previous_run = false; // restore grid locations from a previous run
+std::string save_restore_filename = "restore.csv";
 
 // BabelColor averages in sRGB:
 //   http://www.babelcolor.com/main_level/ColorChecker.htm
@@ -116,8 +116,7 @@ With 8-bit images, Opencv offsets ab and scales L in a weird way to fit back int
 
 */
 
-double euclidean_distance_lab(CvScalar p_1, CvScalar p_2)
-{
+double deltaE_distance(CvScalar p_1, CvScalar p_2) {
     // convert to Lab for better perceptual distance
     //IplImage * convert = cvCreateImage( cvSize(2,1), 8, 3);
     IplImage * convert = cvCreateImage( cvSize(2,1), IPL_DEPTH_32F, 3);
@@ -158,6 +157,29 @@ double euclidean_distance_lab(CvScalar p_1, CvScalar p_2)
     //return euclidean_distance(p_1, p_2);
     return diff;
 }
+double deltaC_distance(CvScalar p_1, CvScalar p_2) {
+    // convert to Lab and only look at a b diff
+    IplImage * convert = cvCreateImage( cvSize(2,1), IPL_DEPTH_32F, 3);
+    for(int i = 0; i < 3; i++) {
+        p_1.val[i] = p_1.val[i] / 255.;
+        p_2.val[i] = p_2.val[i] / 255.;
+    }
+    cvSet2D(convert,0,0,p_1);
+    cvSet2D(convert,0,1,p_2);
+
+    cvCvtColor(convert,convert,CV_BGR2Lab);
+    p_1 = cvGet2D(convert,0,0);
+    p_2 = cvGet2D(convert,0,1);
+
+    cvReleaseImage(&convert);
+
+    double sum = 0;
+    sum += pow(p_1.val[1]-p_2.val[1],2);
+    sum += pow(p_1.val[2]-p_2.val[2],2);
+    //printf("ED: %d %d  - %d %d = %0.2f\n", p_2.x, p_2.y, p_1.x, p_1.y, sqrt(sum));
+    return sqrt(sum);
+}
+
 
 CvRect contained_rectangle(CvBox2D box)
 {
@@ -234,7 +256,7 @@ double check_colorchecker(CvMat * colorchecker)
         for(int y = 0; y < MACBETH_HEIGHT; y++) {
             CvScalar known_value = colorchecker_srgb[y][x];
             CvScalar test_value = cvGet2D(colorchecker,y,x);
-            difference += euclidean_distance_lab(test_value,known_value);
+            difference += deltaE_distance(test_value,known_value);
 
         }
     }
@@ -274,7 +296,7 @@ void draw_colorchecker(CvMat * colorchecker_values, CvMat * colorchecker_points,
             CvScalar this_color = cvGet2D(colorchecker_values,y,x);
             CvScalar this_point = cvGet2D(colorchecker_points,y,x);
 
-            int difference = int(euclidean_distance_lab(this_color,colorchecker_srgb[y][x]));
+            int difference = int(deltaE_distance(this_color,colorchecker_srgb[y][x]));
             std::string res = std::to_string(difference);
 
             
@@ -451,63 +473,63 @@ ColorChecker find_colorchecker(CvSeq * quads, CvSeq * boxes, CvMemStorage *stora
 
 void save_data(ColorChecker found_colorchecker) {
 
-   printf("saving grid data to restore.cpp\n");
-
+   printf("saving grid data to %s\n", save_restore_filename.c_str());
    FILE *fp = NULL;
-   fp = fopen("restore.cpp", "w");
-
-   fprintf(fp,"    // start of macduff grid data \n");
-   fprintf(fp,"    double average_size = %.0f;\n", found_colorchecker.size);
-   fprintf(fp,"    CvMat * this_colorchecker_points = cvCreateMat( MACBETH_HEIGHT, MACBETH_WIDTH, CV_32FC2 );\n");
-
-
+   fp = fopen(save_restore_filename.c_str(), "w");
+   fprintf(fp,"\"index\",\"x\",\"y\",\"ptx\",\"pty\",\"size\",\n");
     // dump found_colorchecker.points
+    int i = 0;
     for(int y = 0; y < MACBETH_HEIGHT; y++) {            
         for(int x = 0; x < MACBETH_WIDTH; x++) {
             CvScalar this_point = cvGet2D(found_colorchecker.points,y,x);
-            fprintf(fp,"    cvSet2D(this_colorchecker_points, %d, %d, cvScalar(%.0f,%.0f));\n", y, x, this_point.val[0],this_point.val[1]);
+            fprintf(fp,"%3d,%2d,%2d,%5.0f,%5.0f,%5.0f\n",
+                    i,x,y,this_point.val[0], this_point.val[1], found_colorchecker.size);
+            i++;
         }
     }
-   fprintf(fp,"    // end of macduff grid data \n");
+
    fclose(fp);
 }
 
 ColorChecker restore_data(IplImage *original_image) {
 
-    printf("restoring data\n");
-#include "restore.cpp"
+    printf("restoring data from %s\n", save_restore_filename.c_str());
+    FILE *fp;
+    fp = fopen(save_restore_filename.c_str(), "r");
 
-    printf("getting color values from restored grid\n");
+    int index,x,y,ptx,pty,size;
+    CvMat * this_colorchecker_points = cvCreateMat( MACBETH_HEIGHT, MACBETH_WIDTH, CV_32FC2);
+    CvMat * this_colorchecker_values = cvCreateMat( MACBETH_HEIGHT, MACBETH_WIDTH, CV_32FC3);
 
-    CvMat * this_colorchecker_values = cvCreateMat(MACBETH_HEIGHT, MACBETH_WIDTH, CV_32FC3);
-    // calculate the averages for our oriented colorchecker
-    for(int x = 0; x < MACBETH_WIDTH; x++) {
-        for(int y = 0; y < MACBETH_HEIGHT; y++) {
-            
-            CvScalar this_point = cvGet2D(this_colorchecker_points,y,x);
-            CvRect rect = cvRect(0,0,average_size,average_size);
-            rect.x = this_point.val[0];
-            rect.y = this_point.val[1];
-            
-            rect.x = rect.x - average_size / 2;
-            rect.y = rect.y - average_size / 2;
+    //while (fscanf(fp, "%i,%i,%i,%i,%i,%i", &index,&x,&y,&ptx,&pty,&size) > 0) {
+   char buff[255];
+   while(fgets(buff, 255, fp)) {
+        int ret = sscanf(buff, "%d,%d,%d,%d,%d,%d", &index,&x,&y,&ptx,&pty,&size);
+        printf("SCAN: %s => i=%d,x=%d,y=%d,ptx=%d,pty=%d,size=%d\n", buff, index,x,y,ptx,pty,size);
+        if (ret == 6) {
+            cvSet2D(this_colorchecker_points, y, x, cvScalar(  ptx, pty  ));
+            CvRect rect = cvRect(ptx,pty,size,size);
+            rect.x = rect.x - (float) size / 2.0;
+            rect.y = rect.y - (float) size / 2.0;
             
             CvScalar average_color = rect_average(rect, original_image);
             
             cvSet2D(this_colorchecker_values,y,x,average_color);
-            //printf("GET: w,h color= (%d, %d) xy=(%d,%d) -> (%f %f %f)\n", x, y, rect.x, rect.y, average_color.val[2], average_color.val[1], average_color.val[0]);
         }
-    }
-   
-    // already oriented when saved
-    ColorChecker found_colorchecker;
-    found_colorchecker.points = this_colorchecker_points;
-    found_colorchecker.error  = check_colorchecker(this_colorchecker_values);
-    found_colorchecker.values = this_colorchecker_values;
-    found_colorchecker.size   = average_size; 
+   }
 
-    printf("done restoring data\n");
-    return found_colorchecker;
+   fclose(fp);
+
+   
+   // already oriented when saved
+   ColorChecker found_colorchecker;
+   found_colorchecker.points = this_colorchecker_points;
+   found_colorchecker.error  = check_colorchecker(this_colorchecker_values);
+   found_colorchecker.values = this_colorchecker_values;
+   found_colorchecker.size   = size; 
+
+   printf("done restoring data\n");
+   return found_colorchecker;
 
 }
 
@@ -684,7 +706,7 @@ IplImage * find_macbeth( const char *img )
                         CvPoint closest_color_idx = cvPoint(-1,-1);
                         for(int y = 0; y < MACBETH_HEIGHT; y++) {
                             for(int x = 0; x < MACBETH_WIDTH; x++) {
-                                double distance = euclidean_distance_lab(average,colorchecker_srgb[y][x]);
+                                double distance = deltaE_distance(average,colorchecker_srgb[y][x]);
                                 if(distance < min_distance) {
                                     closest_color_idx.x = x;
                                     closest_color_idx.y = y;
@@ -850,17 +872,23 @@ IplImage * find_macbeth( const char *img )
 
             // print out the colorchecker info
             // should assert that found_colorchecker.error == total_error
-            printf("  R , G , B ,   r , g , b , deltaE, GreyFactor\n");
+            printf("  R , G , B ,   r , g , b , deltaE, deltaC, GreyFactor\n");
 
-            double deltaE_total_error, deltaE_max_error = 0;
-            double grey_factor, grey_total_error, grey_max_error = 0;
+            float deltaE, deltaE_total_error, deltaE_max_error = 0;
+            float grey_factor, grey_total_error, grey_max_error = 0;
+            float deltaC, deltaC_total_error, deltaC_max_error = 0;
             for(int y = 0; y < MACBETH_HEIGHT; y++) {            
                 for(int x = 0; x < MACBETH_WIDTH; x++) {
                     CvScalar known_value = colorchecker_srgb[y][x];
                     CvScalar this_value = cvGet2D(found_colorchecker.values,y,x);
-                    double distance = euclidean_distance_lab(this_value,known_value);
-                    deltaE_total_error += distance;
-                    deltaE_max_error = std::max(deltaE_max_error, distance);
+
+                    deltaE = deltaE_distance(this_value,known_value);
+                    deltaE_total_error += deltaE;
+                    deltaE_max_error = std::max(deltaE_max_error, deltaE);
+
+                    deltaC = deltaC_distance(this_value,known_value);
+                    deltaC_total_error += deltaC;
+                    deltaC_max_error = std::max(deltaC_max_error, deltaC);
                     
                     if (y == MACBETH_HEIGHT - 1) {
                         grey_factor = calc_grey_factor(this_value);
@@ -868,13 +896,13 @@ IplImage * find_macbeth( const char *img )
                         grey_max_error = std::max(grey_max_error, grey_factor);
                     }
                     
-                    printf(" %3.0f,%3.0f,%3.0f,  %3.0f,%3.0f,%3.0f,  %3.0f",
+                    printf(" %3.0f,%3.0f,%3.0f,  %3.0f,%3.0f,%3.0f,  %3.0f,  %3.0f",
                         known_value.val[2],known_value.val[1],known_value.val[0],
                          this_value.val[2], this_value.val[1], this_value.val[0],
-                        distance
+                         deltaE, deltaC
                     );
                     if (y == MACBETH_HEIGHT - 1) {
-                        printf(",  %3.0f\n", grey_factor);
+                        printf(",   %3.0f\n", grey_factor);
                     } else {
                         printf("\n");
                     }
@@ -884,35 +912,33 @@ IplImage * find_macbeth( const char *img )
             }
             printf("\n");
            
-    /* 
-            // print out the colorchecker info
-            for(int y = 0; y < MACBETH_HEIGHT; y++) {            
-                for(int x = 0; x < MACBETH_WIDTH; x++) {
-                    CvScalar this_value = cvGet2D(found_colorchecker.values,y,x);
-                    CvScalar this_point = cvGet2D(found_colorchecker.points,y,x);
-                    
-                    printf("x=%.0f,y=%.0f,%.3f,%.3f,%.3f\n",
-                        this_point.val[0],this_point.val[1],
-                        this_value.val[2]/f,this_value.val[1]/f,this_value.val[0]/f);
-                }
-            }
-    */
             float grey_average_error = grey_total_error / (float) MACBETH_WIDTH;
 
-            printf("           grey_total_error = %.1f\n", grey_total_error);
-            printf("             grey_max_error = %.1f\n", grey_max_error);
-            printf("         grey_average_error = %.1f\n", grey_average_error);
+            printf("     grey_total = %5.1f", grey_total_error);
+            printf("       grey_max = %5.1f", grey_max_error);
+            printf("   grey_average = %5.1f", grey_average_error);
             printf("\n");
                             
+                            
+            float deltaC_average_error = 
+                    deltaC_total_error / (float) (MACBETH_HEIGHT * MACBETH_WIDTH);
+
+            printf("   deltaC_total = %5.1f", deltaC_total_error);
+            printf("     deltaC_max = %5.1f", deltaC_max_error);
+            printf(" deltaC_average = %5.1f", deltaC_average_error);
+            printf("\n");
+
                             
             float deltaE_average_error = 
                     deltaE_total_error / (float) (MACBETH_HEIGHT * MACBETH_WIDTH);
 
-            printf("         deltaE_total_error = %.1f\n", deltaE_total_error);
-            printf("           deltaE_max_error = %.1f\n", deltaE_max_error);
-            printf("       deltaE_average_error = %.1f\n", deltaE_average_error);
+            printf("   deltaE_total = %5.1f", deltaE_total_error);
+            printf("     deltaE_max = %5.1f", deltaE_max_error);
+            printf(" deltaE_average = %5.1f", deltaE_average_error);
+            printf("\n");
 
             int size = found_colorchecker.size;
+            int thickness = 1;
 
             char buf[BUFSIZ];
             sprintf (buf, "grey_average_error  = %2.0f", grey_average_error);
@@ -920,18 +946,27 @@ IplImage * find_macbeth( const char *img )
                 macbeth_img, 
                 cv::Rect(0,0,size * 10,size),
                 cv::FONT_HERSHEY_TRIPLEX,
-                3,
+                thickness,
+                cv::Scalar(255,255,255),
+                buf
+            );
+
+            sprintf (buf, "deltaC_average_error = %2.0f", deltaC_average_error);
+            drawtorect( 
+                macbeth_img, 
+                cv::Rect(0, size, size * 10, size),
+                cv::FONT_HERSHEY_TRIPLEX,
+                thickness,
                 cv::Scalar(255,255,255),
                 buf
             );
 
             sprintf (buf, "deltaE_average_error = %2.0f", deltaE_average_error);
-            
             drawtorect( 
                 macbeth_img, 
-                cv::Rect(0, size, size * 10, size),
+                cv::Rect(0, 2 * size, size * 10, size),
                 cv::FONT_HERSHEY_TRIPLEX,
-                3,
+                thickness,
                 cv::Scalar(255,255,255),
                 buf
             );
@@ -962,22 +997,33 @@ int main( int argc, char *argv[] )
     }
 
     const char *img_file = argv[1];
+    const char *out_file = argv[2];
 
     if( argc > 3) {
         std::string arg_str  = argv[3];
         if (arg_str.compare("--restore") == 0) {
             restore_from_previous_run = true;
-            printf( "restoring grid data from previous run\n");
         }
         if (arg_str.compare("--save") == 0) {
             save_restore_data_to_file = true;
-            printf( "saving grid data to restore.cpp\n");
         }
     }
 
+
+    if( argc > 4) {
+        save_restore_filename = argv[4];
+    }
+
+    if (save_restore_data_to_file) 
+        printf( "saving grid data to file: %s\n", save_restore_filename.c_str());
+        
+    if (restore_from_previous_run) 
+        printf( "restoring grid data from file: %s\n", save_restore_filename.c_str());
+
+
     IplImage *out = find_macbeth( img_file );
     if( argc > 2) {
-        cvSaveImage( argv[2], out );
+        cvSaveImage( out_file, out );
     }
     cvReleaseImage( &out );
 
