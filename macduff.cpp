@@ -20,6 +20,7 @@
 bool save_restore_data_to_file = false; // save grid locations in side file
 bool restore_from_previous_run = false; // restore grid locations from a previous run
 std::string save_restore_filename = "restore.csv";
+std::string commandline_str = "";
 
 // BabelColor averages in sRGB:
 //   http://www.babelcolor.com/main_level/ColorChecker.htm
@@ -488,6 +489,7 @@ void save_data(ColorChecker found_colorchecker) {
         }
     }
 
+   fprintf(fp,"# %s\n",commandline_str.c_str());
    fclose(fp);
 }
 
@@ -638,7 +640,7 @@ IplImage * find_macbeth( const char *img )
         int threshold_type = CV_THRESH_BINARY_INV;
         int block_size = cvRound(
             MIN(macbeth_img->width,macbeth_img->height)*0.02)|1;
-        fprintf(stderr,"Using %d as block size\n", block_size);
+        fprintf(stdout,"Using %d as block size\n", block_size);
         
         double offset = 6;
         
@@ -659,7 +661,7 @@ IplImage * find_macbeth( const char *img )
         }
                 
         int element_size = (block_size/10)+2;
-        fprintf(stderr,"Using %d as element size\n", element_size);
+        fprintf(stdout,"Using %d as element size\n", element_size);
         
         // do an opening on the threshold image
         IplConvKernel * element = cvCreateStructuringElementEx(element_size,element_size,element_size/2,element_size/2,CV_SHAPE_RECT);
@@ -872,11 +874,11 @@ IplImage * find_macbeth( const char *img )
 
             // print out the colorchecker info
             // should assert that found_colorchecker.error == total_error
-            printf("  R , G , B ,   r , g , b , deltaE, deltaC, GreyFactor\n");
+            printf("  R , G , B ,   r , g , b , deltaE, deltaC, GreynessFactor\n");
 
-            float deltaE, deltaE_total_error, deltaE_max_error = 0;
-            float grey_factor, grey_total_error, grey_max_error = 0;
-            float deltaC, deltaC_total_error, deltaC_max_error = 0;
+            float deltaE, deltaE_total_error = 0, deltaE_max_error = 0;
+            float grey_factor, grey_total_error = 0, grey_max_error = 0;
+            float deltaC, deltaC_total_error = 0, deltaC_max_error = 0;
             for(int y = 0; y < MACBETH_HEIGHT; y++) {            
                 for(int x = 0; x < MACBETH_WIDTH; x++) {
                     CvScalar known_value = colorchecker_srgb[y][x];
@@ -914,9 +916,9 @@ IplImage * find_macbeth( const char *img )
            
             float grey_average_error = grey_total_error / (float) MACBETH_WIDTH;
 
-            printf("     grey_total = %5.1f", grey_total_error);
-            printf("       grey_max = %5.1f", grey_max_error);
-            printf("   grey_average = %5.1f", grey_average_error);
+            printf("   greyFC_total = %5.1f", grey_total_error);
+            printf("     greyFC_max = %5.1f", grey_max_error);
+            printf(" greyFC_average = %5.1f", grey_average_error);
             printf("\n");
                             
                             
@@ -938,33 +940,36 @@ IplImage * find_macbeth( const char *img )
             printf("\n");
 
             int size = found_colorchecker.size;
-            int thickness = 1;
+            int label_width  = macbeth_img->width  * 0.25;
+            int label_height = macbeth_img->height * 0.05;
+            int thickness    = label_width * 0.001;
+            printf("label_width=%d label_height=%d thickness=%d\n",label_width,label_height,thickness);
 
             char buf[BUFSIZ];
-            sprintf (buf, "grey_average_error  = %2.0f", grey_average_error);
+            sprintf (buf, "grey_average = %2.0f", grey_average_error);
             drawtorect( 
                 macbeth_img, 
-                cv::Rect(0,0,size * 10,size),
+                cv::Rect(0,0,label_width ,label_height),
                 cv::FONT_HERSHEY_TRIPLEX,
                 thickness,
                 cv::Scalar(255,255,255),
                 buf
             );
 
-            sprintf (buf, "deltaC_average_error = %2.0f", deltaC_average_error);
+            sprintf (buf, "deltaC_average = %2.0f", deltaC_average_error);
             drawtorect( 
                 macbeth_img, 
-                cv::Rect(0, size, size * 10, size),
+                cv::Rect(0,label_height,label_width ,label_height),
                 cv::FONT_HERSHEY_TRIPLEX,
                 thickness,
                 cv::Scalar(255,255,255),
                 buf
             );
 
-            sprintf (buf, "deltaE_average_error = %2.0f", deltaE_average_error);
+            sprintf (buf, "deltaE_average = %2.0f", deltaE_average_error);
             drawtorect( 
                 macbeth_img, 
-                cv::Rect(0, 2 * size, size * 10, size),
+                cv::Rect(0,2.0 * label_height,label_width ,label_height),
                 cv::FONT_HERSHEY_TRIPLEX,
                 thickness,
                 cv::Scalar(255,255,255),
@@ -998,6 +1003,9 @@ int main( int argc, char *argv[] )
 
     const char *img_file = argv[1];
     const char *out_file = argv[2];
+
+    for (int i=0;i<argc;i++) 
+        commandline_str.append(argv[i]).append(" ");
 
     if( argc > 3) {
         std::string arg_str  = argv[3];
