@@ -682,7 +682,7 @@ IplImage * find_macbeth( const char *img )
 
         ColorChecker found_colorchecker;
         
-        if(contours) {
+        if(contours or restore_from_previous_run) {
           if (! restore_from_previous_run) {
             int count = 0;
             
@@ -946,13 +946,14 @@ IplImage * find_macbeth( const char *img )
             printf("label_width=%d label_height=%d thickness=%d\n",label_width,label_height,thickness);
 
             char buf[BUFSIZ];
+            cv::Scalar text_color = cv::Scalar(0,0,0);
             sprintf (buf, "grey_average = %2.0f", grey_average_error);
             drawtorect( 
                 macbeth_img, 
                 cv::Rect(0,0,label_width ,label_height),
                 cv::FONT_HERSHEY_TRIPLEX,
                 thickness,
-                cv::Scalar(255,255,255),
+                text_color,
                 buf
             );
 
@@ -962,7 +963,7 @@ IplImage * find_macbeth( const char *img )
                 cv::Rect(0,label_height,label_width ,label_height),
                 cv::FONT_HERSHEY_TRIPLEX,
                 thickness,
-                cv::Scalar(255,255,255),
+                text_color,
                 buf
             );
 
@@ -972,7 +973,7 @@ IplImage * find_macbeth( const char *img )
                 cv::Rect(0,2.0 * label_height,label_width ,label_height),
                 cv::FONT_HERSHEY_TRIPLEX,
                 thickness,
-                cv::Scalar(255,255,255),
+                text_color,
                 buf
             );
 
