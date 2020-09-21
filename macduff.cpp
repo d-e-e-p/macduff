@@ -2,7 +2,9 @@
 #include <opencv/cv.h>
 #include <opencv/highgui.h>
 #include <opencv2/calib3d/calib3d.hpp>
+#include <opencv2/imgcodecs.hpp> 
 #include <opencv2/imgproc.hpp>
+#include <opencv2/photo.hpp>
 #include <iostream>
 #include <fstream>
 
@@ -190,6 +192,34 @@ CvRect contained_rectangle(CvBox2D box)
                   box.size.height/2);
 }
 
+CvScalar rect_stddev(CvRect rect, IplImage* image)
+{       
+
+    cvSetImageROI(image, rect);
+    IplImage *crop = cvCreateImage(cvGetSize(image),
+                               image->depth,
+                               image->nChannels);
+    cvCopy(image, crop, NULL);
+    cvResetImageROI(image);
+
+    cv::Scalar mean;
+    cv::Scalar stddev;
+    cv::meanStdDev(cv::cvarrToMat(crop), mean, stddev);
+    //std::cout << " mean = " << mean.val[0] << std::endl;
+    //std::cout << " std  = " << stddev.val[0] << std::endl;
+
+    bool DEBUG = true;
+    if (DEBUG) {    
+        char buffer [BUFSIZ];
+        sprintf (buffer, "images2/img_%f_%f_%f.jpg", stddev.val[0], stddev.val[1], stddev.val[2]);
+        std::string filename = buffer;
+        cv::imwrite(filename, cv::cvarrToMat(crop));
+    }
+    
+    return stddev;
+}
+
+
 CvScalar rect_average(CvRect rect, IplImage* image)
 {       
     CvScalar average = cvScalarAll(0);
@@ -297,7 +327,7 @@ void draw_colorchecker(CvMat * colorchecker_values, CvMat * colorchecker_points,
             CvScalar this_color = cvGet2D(colorchecker_values,y,x);
             CvScalar this_point = cvGet2D(colorchecker_points,y,x);
 
-            int difference = int(deltaE_distance(this_color,colorchecker_srgb[y][x]));
+            int difference = round(deltaE_distance(this_color,colorchecker_srgb[y][x]));
             std::string res = std::to_string(difference);
 
             
@@ -341,6 +371,7 @@ struct ColorChecker {
     double error;
     CvMat * values;
     CvMat * points;
+    CvMat * stddev;
     double size;
 };
 
@@ -404,6 +435,7 @@ ColorChecker find_colorchecker(CvSeq * quads, CvSeq * boxes, CvMemStorage *stora
     fprintf(stderr,"Average contained rect size is %d\n", average_size);
     
     CvMat * this_colorchecker_values = cvCreateMat(MACBETH_HEIGHT, MACBETH_WIDTH, CV_32FC3);
+    CvMat * this_colorchecker_stddev = cvCreateMat(MACBETH_HEIGHT, MACBETH_WIDTH, CV_32FC3);
     CvMat * this_colorchecker_points = cvCreateMat( MACBETH_HEIGHT, MACBETH_WIDTH, CV_32FC2 );
     
     // calculate the averages for our oriented colorchecker
@@ -441,8 +473,10 @@ ColorChecker find_colorchecker(CvSeq * quads, CvSeq * boxes, CvMemStorage *stora
             // );
             
             CvScalar average_color = rect_average(rect, original_image);
+            CvScalar stddev_color  = rect_stddev(rect, original_image);
             
             cvSet2D(this_colorchecker_values,y,x,average_color);
+            cvSet2D(this_colorchecker_stddev,y,x,stddev_color);
         }
     }
     
@@ -466,6 +500,7 @@ ColorChecker find_colorchecker(CvSeq * quads, CvSeq * boxes, CvMemStorage *stora
     
     found_colorchecker.error = MIN(orient_1_error,orient_2_error);
     found_colorchecker.values = this_colorchecker_values;
+    found_colorchecker.stddev = this_colorchecker_stddev;
     found_colorchecker.points = this_colorchecker_points;
     found_colorchecker.size = average_size;
     
@@ -502,6 +537,7 @@ ColorChecker restore_data(IplImage *original_image) {
     int index,x,y,ptx,pty,size;
     CvMat * this_colorchecker_points = cvCreateMat( MACBETH_HEIGHT, MACBETH_WIDTH, CV_32FC2);
     CvMat * this_colorchecker_values = cvCreateMat( MACBETH_HEIGHT, MACBETH_WIDTH, CV_32FC3);
+    CvMat * this_colorchecker_stddev = cvCreateMat( MACBETH_HEIGHT, MACBETH_WIDTH, CV_32FC3);
 
     //while (fscanf(fp, "%i,%i,%i,%i,%i,%i", &index,&x,&y,&ptx,&pty,&size) > 0) {
    char buff[255];
@@ -515,8 +551,10 @@ ColorChecker restore_data(IplImage *original_image) {
             rect.y = rect.y - (float) size / 2.0;
             
             CvScalar average_color = rect_average(rect, original_image);
+            CvScalar stddev_color  = rect_stddev(rect, original_image);
             
             cvSet2D(this_colorchecker_values,y,x,average_color);
+            cvSet2D(this_colorchecker_stddev,y,x,stddev_color);
         }
    }
 
@@ -528,6 +566,7 @@ ColorChecker restore_data(IplImage *original_image) {
    found_colorchecker.points = this_colorchecker_points;
    found_colorchecker.error  = check_colorchecker(this_colorchecker_values);
    found_colorchecker.values = this_colorchecker_values;
+   found_colorchecker.stddev = this_colorchecker_stddev;
    found_colorchecker.size   = size; 
 
    printf("done restoring data\n");
@@ -615,6 +654,18 @@ float calc_grey_factor(CvScalar value) {
     );
     return greyness;
 }
+
+double rms(CvScalar x)
+{
+	double sum = 0;
+    int n = 3;
+
+	for (int i = 0; i < n; i++)
+		sum += pow(x.val[i], 2);
+
+	return sqrt(sum / n);
+}
+
 
 IplImage * find_macbeth( const char *img )
 {
@@ -874,15 +925,18 @@ IplImage * find_macbeth( const char *img )
 
             // print out the colorchecker info
             // should assert that found_colorchecker.error == total_error
-            printf("  R , G , B ,   r , g , b , deltaE, deltaC, GreynessFactor\n");
+            printf("  R , G , B ,   r , g , b , deltaE, deltaC, Noise, Greyness\n");
 
             float deltaE, deltaE_total_error = 0, deltaE_max_error = 0;
             float grey_factor, grey_total_error = 0, grey_max_error = 0;
             float deltaC, deltaC_total_error = 0, deltaC_max_error = 0;
+            float stddev, stddev_total_error = 0, stddev_max_error = 0;
+
             for(int y = 0; y < MACBETH_HEIGHT; y++) {            
                 for(int x = 0; x < MACBETH_WIDTH; x++) {
                     CvScalar known_value = colorchecker_srgb[y][x];
-                    CvScalar this_value = cvGet2D(found_colorchecker.values,y,x);
+                    CvScalar this_value  = cvGet2D(found_colorchecker.values,y,x);
+                    CvScalar this_stddev = cvGet2D(found_colorchecker.stddev,y,x);
 
                     deltaE = deltaE_distance(this_value,known_value);
                     deltaE_total_error += deltaE;
@@ -891,18 +945,25 @@ IplImage * find_macbeth( const char *img )
                     deltaC = deltaC_distance(this_value,known_value);
                     deltaC_total_error += deltaC;
                     deltaC_max_error = std::max(deltaC_max_error, deltaC);
+
+                    static const float noise_fudge_factor = 10.0;
+                    stddev = rms(this_stddev) * noise_fudge_factor;
+                    stddev_total_error += stddev;
+                    stddev_max_error = std::max(stddev_max_error, stddev);
+
                     
                     if (y == MACBETH_HEIGHT - 1) {
                         grey_factor = calc_grey_factor(this_value);
                         grey_total_error += grey_factor;
                         grey_max_error = std::max(grey_max_error, grey_factor);
                     }
-                    
-                    printf(" %3.0f,%3.0f,%3.0f,  %3.0f,%3.0f,%3.0f,  %3.0f,  %3.0f",
+                  
+                    printf(" %3.0f,%3.0f,%3.0f,  %3.0f,%3.0f,%3.0f,  %3.0f,  %3.0f,  %3.0f",
                         known_value.val[2],known_value.val[1],known_value.val[0],
                          this_value.val[2], this_value.val[1], this_value.val[0],
-                         deltaE, deltaC
+                         deltaE, deltaC, stddev
                     );
+
                     if (y == MACBETH_HEIGHT - 1) {
                         printf(",   %3.0f\n", grey_factor);
                     } else {
@@ -916,16 +977,24 @@ IplImage * find_macbeth( const char *img )
            
             float grey_average_error = grey_total_error / (float) MACBETH_WIDTH;
 
-            printf("   greyFC_total = %5.1f", grey_total_error);
+            //printf("   greyFC_total = %5.1f", grey_total_error);
             printf("     greyFC_max = %5.1f", grey_max_error);
             printf(" greyFC_average = %5.1f", grey_average_error);
             printf("\n");
                             
+            float stddev_average_error = 
+                    stddev_total_error / (float) (MACBETH_HEIGHT * MACBETH_WIDTH);
+
+            //printf("   stddev_total = %5.1f", stddev_total_error);
+            printf("      noise_max = %5.1f", stddev_max_error);
+            printf("  noise_average = %5.1f", stddev_average_error);
+            printf("\n");
+
                             
             float deltaC_average_error = 
                     deltaC_total_error / (float) (MACBETH_HEIGHT * MACBETH_WIDTH);
 
-            printf("   deltaC_total = %5.1f", deltaC_total_error);
+            //printf("   deltaC_total = %5.1f", deltaC_total_error);
             printf("     deltaC_max = %5.1f", deltaC_max_error);
             printf(" deltaC_average = %5.1f", deltaC_average_error);
             printf("\n");
@@ -934,7 +1003,7 @@ IplImage * find_macbeth( const char *img )
             float deltaE_average_error = 
                     deltaE_total_error / (float) (MACBETH_HEIGHT * MACBETH_WIDTH);
 
-            printf("   deltaE_total = %5.1f", deltaE_total_error);
+            //printf("   deltaE_total = %5.1f", deltaE_total_error);
             printf("     deltaE_max = %5.1f", deltaE_max_error);
             printf(" deltaE_average = %5.1f", deltaE_average_error);
             printf("\n");
@@ -946,7 +1015,7 @@ IplImage * find_macbeth( const char *img )
             printf("label_width=%d label_height=%d thickness=%d\n",label_width,label_height,thickness);
 
             char buf[BUFSIZ];
-            cv::Scalar text_color = cv::Scalar(0,0,0);
+            cv::Scalar text_color = cv::Scalar(250,250,250);
             sprintf (buf, "grey_average = %2.0f", grey_average_error);
             drawtorect( 
                 macbeth_img, 
@@ -957,10 +1026,21 @@ IplImage * find_macbeth( const char *img )
                 buf
             );
 
+            sprintf (buf, "noise_average = %2.0f", stddev_average_error);
+            drawtorect( 
+                macbeth_img, 
+                cv::Rect(0,1.0 * label_height,label_width ,label_height),
+                cv::FONT_HERSHEY_TRIPLEX,
+                thickness,
+                text_color,
+                buf
+            );
+
+
             sprintf (buf, "deltaC_average = %2.0f", deltaC_average_error);
             drawtorect( 
                 macbeth_img, 
-                cv::Rect(0,label_height,label_width ,label_height),
+                cv::Rect(0,2.0 * label_height,label_width ,label_height),
                 cv::FONT_HERSHEY_TRIPLEX,
                 thickness,
                 text_color,
@@ -970,7 +1050,7 @@ IplImage * find_macbeth( const char *img )
             sprintf (buf, "deltaE_average = %2.0f", deltaE_average_error);
             drawtorect( 
                 macbeth_img, 
-                cv::Rect(0,2.0 * label_height,label_width ,label_height),
+                cv::Rect(0,3.0 * label_height,label_width ,label_height),
                 cv::FONT_HERSHEY_TRIPLEX,
                 thickness,
                 text_color,
