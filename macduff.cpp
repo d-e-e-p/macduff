@@ -7,6 +7,8 @@
 #include <opencv2/photo.hpp>
 #include <iostream>
 #include <fstream>
+#include <getopt.h>
+
 
 // deltaE calcs
 #include "CIEDE2000.h"
@@ -23,6 +25,7 @@ bool save_restore_data_to_file = false; // save grid locations in side file
 bool restore_from_previous_run = false; // restore grid locations from a previous run
 std::string save_restore_filename = "restore.csv";
 std::string commandline_str = "";
+std::string commentline_str = "";
 
 // BabelColor averages in sRGB:
 //   http://www.babelcolor.com/main_level/ColorChecker.htm
@@ -1057,6 +1060,19 @@ IplImage * find_macbeth( const char *img )
                 buf
             );
 
+            int fudge = 10;
+            int x = cvGetSize(macbeth_img).width  - label_width - fudge;
+            int y = cvGetSize(macbeth_img).height - label_height - fudge;
+            drawtorect( 
+                macbeth_img, 
+                cv::Rect(x,y,label_width ,label_height),
+                cv::FONT_HERSHEY_TRIPLEX,
+                thickness,
+                text_color,
+                commentline_str.c_str()
+            );
+
+
         }
        
         
@@ -1082,26 +1098,62 @@ int main( int argc, char *argv[] )
         return 1;
     }
 
-    const char *img_file = argv[1];
-    const char *out_file = argv[2];
-
     for (int i=0;i<argc;i++) 
         commandline_str.append(argv[i]).append(" ");
 
-    if( argc > 3) {
-        std::string arg_str  = argv[3];
-        if (arg_str.compare("--restore") == 0) {
-            restore_from_previous_run = true;
-        }
-        if (arg_str.compare("--save") == 0) {
-            save_restore_data_to_file = true;
+    static struct option long_options[] =
+    {
+        {"help",     no_argument,       0, 'h'},
+        {"restore",  required_argument, 0, 'r'},
+        {"save",     required_argument, 0, 's'},
+        {"comment",  required_argument, 0, 'c'},
+        {0, 0, 0, 0}
+    };
+
+
+    int opt;
+    int option_index = 0;
+    int i;
+      while ((opt = getopt_long(argc - 2, argv + 2, "-hr:s:c:", long_options, &option_index)) != -1)
+    {
+        switch(opt)
+        {
+            case 'h': /* --help */
+                printf("--help flag\n");
+                break;
+            case 's': /* --save */
+                printf("--save flag (%s)\n", optarg);
+                save_restore_filename = optarg;
+                save_restore_data_to_file = true;
+                break;
+            case 'r': /* --restore */
+                printf("--restore flag (%s)\n", optarg);
+                save_restore_filename = optarg;
+                restore_from_previous_run = true;
+                break;
+            case 'c': /* --comment */
+                printf("--comment flag (%s)\n", optarg);
+                commentline_str = optarg;
+                break;
+            case '\1':
+                printf("File: %s\n", optarg);
+                break;
+            default: /* ??? */
+                fprintf(stderr, "Invalid option %c\n", opt);
+                return 1;
         }
     }
 
+    for (i = optind; i < argc; i++)
+        printf("Process: %d/%d %s\n", i, argc, argv[i]);
 
-    if( argc > 4) {
-        save_restore_filename = argv[4];
-    }
+    char *img_file;
+    if (argc > 1) 
+        img_file = argv[1];
+
+    char *out_file = strdup("check.jpg");
+    if (argc > 2) 
+        out_file = argv[2];
 
     if (save_restore_data_to_file) 
         printf( "saving grid data to file: %s\n", save_restore_filename.c_str());
@@ -1109,11 +1161,13 @@ int main( int argc, char *argv[] )
     if (restore_from_previous_run) 
         printf( "restoring grid data from file: %s\n", save_restore_filename.c_str());
 
+    printf("check input:%s results:%s\n", img_file, out_file);
+
 
     IplImage *out = find_macbeth( img_file );
-    if( argc > 2) {
+    //if( argc > 2) {
         cvSaveImage( out_file, out );
-    }
+    //}
     cvReleaseImage( &out );
 
     return 0;
